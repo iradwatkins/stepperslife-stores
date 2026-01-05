@@ -3,12 +3,9 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import { PublicFooter } from "@/components/layout/PublicFooter";
 import { PublicHeader } from "@/components/layout/PublicHeader";
-import { HeroSection } from "@/components/home/HeroSection";
-import { EventsGrid } from "@/components/home/EventsGrid";
-import { RestaurantsShowcase } from "@/components/home/RestaurantsShowcase";
-import { ClassesSpotlight } from "@/components/home/ClassesSpotlight";
 import { ProductsSection } from "@/components/homepage/ProductsSection";
-import { TodaysEventsCard } from "@/components/home/TodaysEventsCard";
+import { ShoppingBag, Store, ArrowRight } from "lucide-react";
+import Link from "next/link";
 
 // Initialize Convex client for server-side data fetching
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL!;
@@ -31,63 +28,81 @@ async function fetchWithTimeout<T>(
   try {
     return await Promise.race([promise, timeoutPromise]);
   } catch (error) {
-    console.error("[HomePage] Query error:", error);
+    console.error("[StoresHomePage] Query error:", error);
     return fallback;
   }
 }
 
-// Server Component - Unified Homepage for stepperslife.com
+// Server Component - Stores/Marketplace Homepage
 export default async function HomePage() {
-  // Fetch data from all modules in parallel
-  const [events, products] = await Promise.all([
-    fetchWithTimeout(
-      convex.query(api.public.queries.getPublishedEvents, { limit: 100 }),
-      10000,
-      []
-    ),
-    fetchWithTimeout(
-      convex.query(api.products.queries.getActiveProducts),
-      10000,
-      []
-    ),
-  ]);
-
-  // Remove duplicate events
-  const uniqueEvents = events.filter(
-    (event, index, self) => index === self.findIndex((e) => e._id === event._id)
+  const products = await fetchWithTimeout(
+    convex.query(api.products.queries.getActiveProducts),
+    10000,
+    []
   );
 
   return (
     <>
       <PublicHeader />
       <main className="min-h-screen bg-background">
-        {/* Hero Section - Main Landing */}
-        <HeroSection />
+        {/* Hero Section */}
+        <section className="relative bg-gradient-to-br from-primary/10 via-background to-secondary/10 py-16 md:py-24">
+          <div className="container mx-auto px-4">
+            <div className="max-w-3xl mx-auto text-center">
+              <div className="inline-flex items-center gap-2 bg-primary/10 text-primary px-4 py-2 rounded-full mb-6">
+                <Store className="w-5 h-5" />
+                <span className="font-medium">SteppersLife Marketplace</span>
+              </div>
+              <h1 className="text-4xl md:text-5xl font-bold text-foreground mb-6">
+                Shop from Local Vendors
+              </h1>
+              <p className="text-xl text-muted-foreground mb-8">
+                Discover unique products from our community of vendors. Support small businesses and find exclusive stepping merchandise.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                <Link
+                  href="/marketplace"
+                  className="inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-semibold hover:bg-primary/90 transition-colors"
+                >
+                  <ShoppingBag className="w-5 h-5" />
+                  Browse Products
+                  <ArrowRight className="w-5 h-5" />
+                </Link>
+                <Link
+                  href="/marketplace/vendors"
+                  className="inline-flex items-center justify-center gap-2 bg-secondary text-secondary-foreground px-8 py-4 rounded-lg font-semibold hover:bg-secondary/90 transition-colors"
+                >
+                  <Store className="w-5 h-5" />
+                  View Vendors
+                </Link>
+              </div>
+            </div>
+          </div>
+        </section>
 
-        {/* Staff/Organizer Quick Access - Today's Events to Scan */}
-        <div className="container mx-auto px-4 pt-8">
-          <TodaysEventsCard />
-        </div>
-
-        {/* 1. Events Section - /events */}
-        <Suspense fallback={<SectionSkeleton title="Upcoming Events" />}>
-          <EventsGrid events={uniqueEvents as any} />
-        </Suspense>
-
-        {/* 2. Classes Section - /classes */}
-        <Suspense fallback={<SectionSkeleton title="Classes" />}>
-          <ClassesSpotlight />
-        </Suspense>
-
-        {/* 3. Marketplace/Products Section - /marketplace */}
-        <Suspense fallback={<SectionSkeleton title="Marketplace" />}>
+        {/* Products Grid */}
+        <Suspense fallback={<SectionSkeleton title="Featured Products" />}>
           <ProductsSection products={products} />
         </Suspense>
 
-        {/* 4. Restaurants Section - /restaurants */}
-        <Suspense fallback={<SectionSkeleton title="Restaurants" />}>
-          <RestaurantsShowcase />
-        </Suspense>
+        {/* CTA Section */}
+        <section className="bg-muted/50 py-16">
+          <div className="container mx-auto px-4 text-center">
+            <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-4">
+              Want to Sell Your Products?
+            </h2>
+            <p className="text-muted-foreground mb-8 max-w-2xl mx-auto">
+              Join our marketplace and reach thousands of customers. Easy setup, low fees, and a community that supports small businesses.
+            </p>
+            <Link
+              href="/vendor/apply"
+              className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-8 py-4 rounded-lg font-semibold hover:bg-primary/90 transition-colors"
+            >
+              Become a Vendor
+              <ArrowRight className="w-5 h-5" />
+            </Link>
+          </div>
+        </section>
       </main>
       <PublicFooter />
     </>
