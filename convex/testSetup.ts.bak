@@ -1,0 +1,630 @@
+/**
+ * Test Setup Action
+ *
+ * Creates a complete test restaurant with staff, menu, and test order.
+ * Run via: npx convex run testSetup:setupTestRestaurant
+ */
+
+import { v } from "convex/values";
+import { action, mutation, query, internalAction, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+
+// =====================================================
+// PUBLIC WRAPPER FOR CLI ACCESS
+// =====================================================
+
+/**
+ * Public wrapper to run the internal setup action from CLI
+ * Run via: npx convex run testSetup:runSetup
+ */
+export const runSetup = action({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.runAction(internal.testSetup.setupTestRestaurant, {});
+  },
+});
+
+/**
+ * Enable order acceptance for the restaurant
+ * Run via: npx convex run testSetup:enableOrders
+ */
+export const enableOrders = action({
+  args: {},
+  handler: async (ctx): Promise<{ success: boolean; error?: string; restaurantId?: Id<"restaurants"> }> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const restaurant = await ctx.runQuery(api.restaurants.getBySlug as any, {
+      slug: "dk-soul-food",
+    });
+
+    if (!restaurant) {
+      return { success: false, error: "Restaurant not found" };
+    }
+
+    await ctx.runMutation(internal.restaurants.enableOrdersInternal, {
+      restaurantId: restaurant._id,
+    });
+
+    return { success: true, restaurantId: restaurant._id };
+  },
+});
+
+/**
+ * Complete setup: enable orders and create test customer
+ * Run via: npx convex run testSetup:completeSetup
+ */
+export const completeSetup = action({
+  args: {},
+  handler: async (ctx) => {
+    const steps: string[] = [];
+
+    // 1. Enable orders
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const restaurant = await ctx.runQuery(api.restaurants.getBySlug as any, {
+      slug: "dk-soul-food",
+    });
+
+    if (!restaurant) {
+      return { success: false, error: "Restaurant not found", steps };
+    }
+
+    await ctx.runMutation(internal.restaurants.enableOrdersInternal, {
+      restaurantId: restaurant._id,
+    });
+    steps.push("✓ Order acceptance enabled");
+
+    // Test customer creation skipped - use registration flow instead
+    steps.push("ℹ Use registration form to create test customer");
+
+    return {
+      success: true,
+      restaurantId: restaurant._id,
+      testCustomerEmail: "register via /auth/register",
+      testCustomerPassword: "TestPassword123!",
+      steps,
+    };
+  },
+});
+
+/**
+ * Add Unsplash images to all menu items
+ * Run via: npx convex run testSetup:addMenuImages
+ */
+export const addMenuImages = action({
+  args: {},
+  handler: async (ctx) => {
+    const steps: string[] = [];
+
+    // Get the restaurant
+    const restaurant = await ctx.runQuery(api.restaurants.getBySlug, {
+      slug: "dk-soul-food",
+    });
+
+    if (!restaurant) {
+      return { success: false, error: "Restaurant not found", steps };
+    }
+
+    // Get all menu items
+    const menuItems = await ctx.runQuery(api.menuItems.getByRestaurant, {
+      restaurantId: restaurant._id,
+    });
+
+    // Unsplash images for each menu item type
+    const imageMap: Record<string, string> = {
+      "Fried Chicken": "https://images.unsplash.com/photo-1626082927389-6cd097cdc6ec?w=800&q=80",
+      "Smothered Pork Chops": "https://images.unsplash.com/photo-1432139555190-58524dae6a55?w=800&q=80",
+      "Mac & Cheese": "https://images.unsplash.com/photo-1543339494-b4cd4f7ba686?w=800&q=80",
+      "Collard Greens": "https://images.unsplash.com/photo-1574484284002-952d92456975?w=800&q=80",
+      "Cornbread": "https://images.unsplash.com/photo-1586444248879-bc604bc77f76?w=800&q=80",
+      "Sweet Potato Pie": "https://images.unsplash.com/photo-1509461399763-ae67a981b254?w=800&q=80",
+      "Sweet Tea": "https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=800&q=80",
+      "Lemonade": "https://images.unsplash.com/photo-1621263764928-df1444c5e859?w=800&q=80",
+    };
+
+    // Update each menu item with its image
+    for (const item of menuItems) {
+      const imageUrl = imageMap[item.name];
+      if (imageUrl) {
+        await ctx.runMutation(internal.menuItems.updateInternal, {
+          id: item._id,
+          imageUrl,
+        });
+        steps.push(`✓ Added image to ${item.name}`);
+      } else {
+        steps.push(`⚠ No image found for ${item.name}`);
+      }
+    }
+
+    return {
+      success: true,
+      itemsUpdated: steps.filter(s => s.startsWith("✓")).length,
+      steps,
+    };
+  },
+});
+
+// =====================================================
+// CONFIGURATION
+// =====================================================
+
+const RESTAURANT_DATA = {
+  name: "DK Soul Food",
+  description: "Authentic soul food made with love. Serving the community with delicious home-style cooking.",
+  address: "Chicago, IL",
+  city: "Chicago",
+  state: "IL",
+  zipCode: "60601",
+  phone: "(312) 555-0100",
+  cuisine: ["Soul Food", "Southern", "Comfort Food"],
+  contactName: "Ira Watkins",
+  contactEmail: "ira@irawatkins.com",
+  estimatedPickupTime: 25,
+};
+
+const OPERATING_HOURS = {
+  monday: { open: "11:00 AM", close: "9:00 PM", closed: false },
+  tuesday: { open: "11:00 AM", close: "9:00 PM", closed: false },
+  wednesday: { open: "11:00 AM", close: "9:00 PM", closed: false },
+  thursday: { open: "11:00 AM", close: "10:00 PM", closed: false },
+  friday: { open: "11:00 AM", close: "11:00 PM", closed: false },
+  saturday: { open: "10:00 AM", close: "11:00 PM", closed: false },
+  sunday: { open: "10:00 AM", close: "8:00 PM", closed: false },
+};
+
+const STAFF_INVITES = [
+  {
+    email: "manager@stepperslife.com",
+    name: "Kitchen Manager",
+    phone: "(312) 555-0101",
+    role: "RESTAURANT_MANAGER" as const,
+  },
+  {
+    email: "staff@stepperslife.com",
+    name: "Order Handler",
+    role: "RESTAURANT_STAFF" as const,
+    permissions: {
+      canManageOrders: true,
+      canManageMenu: false,
+      canManageHours: false,
+      canViewAnalytics: false,
+    },
+  },
+];
+
+const MENU_CATEGORIES = [
+  { name: "Appetizers", description: "Start your meal right", sortOrder: 1 },
+  { name: "Main Dishes", description: "Hearty soul food favorites", sortOrder: 2 },
+  { name: "Sides", description: "Classic southern sides", sortOrder: 3 },
+  { name: "Desserts", description: "Sweet endings", sortOrder: 4 },
+  { name: "Beverages", description: "Refreshing drinks", sortOrder: 5 },
+];
+
+const MENU_ITEMS = [
+  { category: "Main Dishes", name: "Fried Chicken", description: "Crispy fried chicken, 2 pieces with your choice of side", price: 1499, sortOrder: 1 },
+  { category: "Main Dishes", name: "Smothered Pork Chops", description: "Tender pork chops in rich onion gravy", price: 1699, sortOrder: 2 },
+  { category: "Sides", name: "Mac & Cheese", description: "Creamy three-cheese macaroni", price: 599, sortOrder: 1 },
+  { category: "Sides", name: "Collard Greens", description: "Slow-cooked with smoked turkey", price: 499, sortOrder: 2 },
+  { category: "Sides", name: "Cornbread", description: "Sweet buttermilk cornbread", price: 299, sortOrder: 3 },
+  { category: "Desserts", name: "Sweet Potato Pie", description: "Homemade with love", price: 699, sortOrder: 1 },
+  { category: "Beverages", name: "Sweet Tea", description: "Southern-style sweet tea", price: 299, sortOrder: 1 },
+  { category: "Beverages", name: "Lemonade", description: "Fresh-squeezed lemonade", price: 349, sortOrder: 2 },
+];
+
+// =====================================================
+// MAIN SETUP ACTION (uses internal mutations for auth bypass)
+// =====================================================
+
+export const setupTestRestaurant = internalAction({
+  args: {
+    skipIfExists: v.optional(v.boolean()),
+    ownerId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    restaurantId?: string;
+    errors: string[];
+    steps: string[];
+  }> => {
+    const errors: string[] = [];
+    const steps: string[] = [];
+
+    try {
+      // Check if restaurant already exists
+      const existing = await ctx.runQuery(api.restaurants.getBySlug, {
+        slug: "dk-soul-food",
+      });
+
+      if (existing) {
+        if (args.skipIfExists) {
+          return {
+            success: true,
+            restaurantId: existing._id,
+            errors: [],
+            steps: ["Restaurant already exists, skipping setup"],
+          };
+        }
+        return {
+          success: true,
+          restaurantId: existing._id,
+          errors: [],
+          steps: ["Restaurant already exists"],
+        };
+      }
+
+      // Get an owner ID - either provided or find the ira@irawatkins.com user
+      let ownerId = args.ownerId;
+      if (!ownerId) {
+        // Find the restaurant owner by email
+        const ownerUser = await ctx.runQuery(internal.users.queries.getByEmailInternal, {
+          email: "ira@irawatkins.com",
+        });
+        if (!ownerUser) {
+          // Fall back to admin user
+          const adminUser = await ctx.runQuery(internal.users.queries.getAdminUser, {});
+          if (!adminUser) {
+            errors.push("No owner user found. Please provide ownerId.");
+            return { success: false, errors, steps };
+          }
+          ownerId = adminUser._id;
+          steps.push(`Using admin user as owner: ${adminUser.email}`);
+        } else {
+          ownerId = ownerUser._id;
+          steps.push(`Using ${ownerUser.email} as restaurant owner`);
+        }
+      }
+
+      // STEP 1: Create Restaurant using internal mutation
+      steps.push("Creating restaurant...");
+      let restaurantId: Id<"restaurants">;
+      try {
+        restaurantId = await ctx.runMutation(internal.restaurants.createInternal, {
+          name: RESTAURANT_DATA.name,
+          description: RESTAURANT_DATA.description,
+          ownerId,
+          address: RESTAURANT_DATA.address,
+          city: RESTAURANT_DATA.city,
+          state: RESTAURANT_DATA.state,
+          zipCode: RESTAURANT_DATA.zipCode,
+          phone: RESTAURANT_DATA.phone,
+          cuisine: RESTAURANT_DATA.cuisine,
+          contactName: RESTAURANT_DATA.contactName,
+          contactEmail: RESTAURANT_DATA.contactEmail,
+          estimatedPickupTime: RESTAURANT_DATA.estimatedPickupTime,
+          operatingHours: OPERATING_HOURS,
+          isActive: true,
+        });
+        steps.push(`✓ Restaurant created: ${restaurantId}`);
+      } catch (error: any) {
+        errors.push(`Failed to create restaurant: ${error.message}`);
+        return { success: false, errors, steps };
+      }
+
+      // STEP 2: Create Menu Categories using internal mutation
+      steps.push("Creating menu categories...");
+      const categoryIds: Record<string, Id<"menuCategories">> = {};
+      for (const cat of MENU_CATEGORIES) {
+        try {
+          categoryIds[cat.name] = await ctx.runMutation(internal.menuItems.createCategoryInternal, {
+            restaurantId,
+            name: cat.name,
+            description: cat.description,
+            sortOrder: cat.sortOrder,
+          });
+          steps.push(`✓ Created category: ${cat.name}`);
+        } catch (error: any) {
+          errors.push(`Failed to create category ${cat.name}: ${error.message}`);
+        }
+      }
+
+      // STEP 3: Create Menu Items using internal mutation
+      steps.push("Creating menu items...");
+      for (const item of MENU_ITEMS) {
+        try {
+          const categoryId = categoryIds[item.category];
+          if (!categoryId) {
+            errors.push(`Category not found for item ${item.name}: ${item.category}`);
+            continue;
+          }
+          await ctx.runMutation(internal.menuItems.createInternal, {
+            restaurantId,
+            categoryId,
+            name: item.name,
+            description: item.description,
+            price: item.price,
+            sortOrder: item.sortOrder,
+          });
+          steps.push(`✓ Created item: ${item.name} ($${(item.price / 100).toFixed(2)})`);
+        } catch (error: any) {
+          errors.push(`Failed to create item ${item.name}: ${error.message}`);
+        }
+      }
+
+      return {
+        success: errors.length === 0,
+        restaurantId,
+        errors,
+        steps,
+      };
+    } catch (error: any) {
+      errors.push(`Unexpected error: ${error.message}`);
+      return { success: false, errors, steps };
+    }
+  },
+});
+
+async function placeTestOrder(
+  ctx: any,
+  restaurantId: Id<"restaurants">,
+  steps: string[],
+  errors: string[],
+  menuItemIds?: Record<string, Id<"menuItems">>
+): Promise<{ orderId: string; orderNumber: string } | null> {
+  steps.push("Placing test order for ira@irawatkins.com...");
+
+  // Get menu items if not provided
+  if (!menuItemIds) {
+    try {
+      const items = await ctx.runQuery(api.menuItems.getByRestaurant, { restaurantId });
+      menuItemIds = {};
+      for (const item of items) {
+        menuItemIds[item.name] = item._id;
+      }
+    } catch (error: any) {
+      errors.push(`Failed to get menu items: ${error.message}`);
+      return null;
+    }
+  }
+
+  // Find customer
+  let customerId: Id<"users"> | undefined;
+  try {
+    const customer = await ctx.runQuery(api.users.queries.getUserByEmail, {
+      email: "ira@irawatkins.com",
+    });
+    customerId = customer?._id;
+    if (customerId) {
+      steps.push(`✓ Found customer: ${customerId}`);
+    } else {
+      steps.push("⚠ Customer not found, order will not be linked to user");
+    }
+  } catch (error: any) {
+    steps.push("⚠ Could not look up customer");
+  }
+
+  // Build order items
+  const orderItems = [
+    { name: "Fried Chicken", quantity: 2, price: 1499 },
+    { name: "Mac & Cheese", quantity: 1, price: 599 },
+    { name: "Collard Greens", quantity: 1, price: 499 },
+    { name: "Cornbread", quantity: 2, price: 299 },
+    { name: "Sweet Tea", quantity: 2, price: 299 },
+  ].map((item) => ({
+    menuItemId: menuItemIds![item.name] || ("unknown" as any),
+    name: item.name,
+    price: item.price,
+    quantity: item.quantity,
+  }));
+
+  // Calculate totals
+  const subtotal = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const tax = Math.round(subtotal * 0.0875); // 8.75% tax
+  const total = subtotal + tax;
+
+  try {
+    const orderResult = await ctx.runAction(api.foodOrders.createWithNotification, {
+      restaurantId,
+      customerId,
+      customerName: "Ira Watkins",
+      customerEmail: "ira@irawatkins.com",
+      customerPhone: "(555) 123-4567",
+      items: orderItems,
+      subtotal,
+      tax,
+      total,
+      paymentMethod: "pay_at_pickup",
+      specialInstructions: "Extra napkins please. Test order for validation.",
+    });
+
+    steps.push(`✓ Order placed: ${orderResult.orderNumber} ($${(total / 100).toFixed(2)})`);
+
+    // Process through statuses
+    steps.push("Processing order through statuses...");
+
+    const statuses = ["CONFIRMED", "PREPARING", "READY_FOR_PICKUP"];
+    for (const status of statuses) {
+      try {
+        await ctx.runAction(api.foodOrders.updateStatusWithNotification, {
+          id: orderResult.orderId,
+          status,
+        });
+        steps.push(`✓ Status updated to: ${status}`);
+      } catch (error: any) {
+        errors.push(`Failed to update status to ${status}: ${error.message}`);
+      }
+    }
+
+    // Mark as paid
+    try {
+      await ctx.runMutation(api.foodOrders.updatePaymentStatus, {
+        id: orderResult.orderId,
+        paymentStatus: "paid",
+        paymentMethod: "cash",
+      });
+      steps.push("✓ Payment marked as received");
+    } catch (error: any) {
+      errors.push(`Failed to mark payment: ${error.message}`);
+    }
+
+    // Complete order
+    try {
+      await ctx.runAction(api.foodOrders.updateStatusWithNotification, {
+        id: orderResult.orderId,
+        status: "COMPLETED",
+      });
+      steps.push("✓ Order completed");
+    } catch (error: any) {
+      errors.push(`Failed to complete order: ${error.message}`);
+    }
+
+    return {
+      orderId: orderResult.orderId,
+      orderNumber: orderResult.orderNumber,
+    };
+  } catch (error: any) {
+    errors.push(`Failed to place order: ${error.message}`);
+    return null;
+  }
+}
+
+// =====================================================
+// HELPER QUERIES
+// =====================================================
+
+export const getTestRestaurant = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("restaurants")
+      .withIndex("by_slug", (q) => q.eq("slug", "dk-soul-food"))
+      .first();
+  },
+});
+
+export const getTestOrderStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const restaurant = await ctx.db
+      .query("restaurants")
+      .withIndex("by_slug", (q) => q.eq("slug", "dk-soul-food"))
+      .first();
+
+    if (!restaurant) {
+      return { restaurantExists: false };
+    }
+
+    const orders = await ctx.db
+      .query("foodOrders")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+
+    const staff = await ctx.db
+      .query("restaurantStaff")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+
+    const categories = await ctx.db
+      .query("menuCategories")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+
+    const menuItems = await ctx.db
+      .query("menuItems")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+
+    return {
+      restaurantExists: true,
+      restaurantId: restaurant._id,
+      restaurantName: restaurant.name,
+      isActive: restaurant.isActive,
+      acceptingOrders: restaurant.acceptingOrders,
+      stats: {
+        orders: orders.length,
+        pendingOrders: orders.filter((o) => o.status === "PENDING").length,
+        completedOrders: orders.filter((o) => o.status === "COMPLETED").length,
+        staff: staff.length,
+        activeStaff: staff.filter((s) => s.status === "ACTIVE").length,
+        pendingInvites: staff.filter((s) => s.status === "PENDING").length,
+        categories: categories.length,
+        menuItems: menuItems.length,
+        availableItems: menuItems.filter((m) => m.isAvailable).length,
+      },
+    };
+  },
+});
+
+// =====================================================
+// CLEANUP (for testing)
+// =====================================================
+
+export const cleanupTestRestaurant = mutation({
+  args: {
+    confirm: v.literal("DELETE_TEST_RESTAURANT"),
+  },
+  handler: async (ctx, args) => {
+    const restaurant = await ctx.db
+      .query("restaurants")
+      .withIndex("by_slug", (q) => q.eq("slug", "dk-soul-food"))
+      .first();
+
+    if (!restaurant) {
+      return { success: false, message: "Restaurant not found" };
+    }
+
+    // Delete related data
+    const orders = await ctx.db
+      .query("foodOrders")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const order of orders) {
+      await ctx.db.delete(order._id);
+    }
+
+    const staff = await ctx.db
+      .query("restaurantStaff")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const member of staff) {
+      await ctx.db.delete(member._id);
+    }
+
+    const categories = await ctx.db
+      .query("menuCategories")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const cat of categories) {
+      await ctx.db.delete(cat._id);
+    }
+
+    const menuItems = await ctx.db
+      .query("menuItems")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const item of menuItems) {
+      await ctx.db.delete(item._id);
+    }
+
+    // Delete reviews
+    const reviews = await ctx.db
+      .query("restaurantReviews")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const review of reviews) {
+      await ctx.db.delete(review._id);
+    }
+
+    // Delete favorites
+    const favorites = await ctx.db
+      .query("favoriteRestaurants")
+      .withIndex("by_restaurant", (q) => q.eq("restaurantId", restaurant._id))
+      .collect();
+    for (const fav of favorites) {
+      await ctx.db.delete(fav._id);
+    }
+
+    // Delete restaurant (operatingHours are stored inline)
+    await ctx.db.delete(restaurant._id);
+
+    return {
+      success: true,
+      deleted: {
+        orders: orders.length,
+        staff: staff.length,
+        categories: categories.length,
+        menuItems: menuItems.length,
+        reviews: reviews.length,
+        favorites: favorites.length,
+      },
+    };
+  },
+});

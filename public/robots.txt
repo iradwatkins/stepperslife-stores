@@ -1,0 +1,16 @@
+# Allow all crawlers
+User-agent: *
+Allow: /
+
+# Disallow sensitive areas
+Disallow: /admin
+Disallow: /organizer/events/*/edit
+Disallow: /api/
+Disallow: /staff/
+Disallow: /scan/
+
+# Allow API documentation if exists
+Allow: /api/docs
+
+# Sitemap
+Sitemap: https://events.stepperslife.com/sitemap.xml
