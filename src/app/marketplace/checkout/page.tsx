@@ -10,7 +10,7 @@ import { MarketplaceSubNav } from "@/components/layout/MarketplaceSubNav";
 import { useState, useEffect, useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Id } from "@/convex/_generated/dataModel";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -108,7 +108,23 @@ function PaymentForm({
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, getSubtotal, clearCart, getItemsByVendor, getVendorCount } = useCart();
+  const searchParams = useSearchParams();
+  const vendorFilter = searchParams.get("vendor");
+
+  const { items: allItems, getSubtotal, clearCart, getItemsByVendor, getVendorCount } = useCart();
+
+  // Filter items by vendor if vendor query param is provided
+  const items = useMemo(() => {
+    if (!vendorFilter) return allItems;
+    return allItems.filter(item => item.vendorId === vendorFilter);
+  }, [allItems, vendorFilter]);
+
+  // Get the filtered vendor name for display
+  const filteredVendorName = useMemo(() => {
+    if (!vendorFilter || items.length === 0) return null;
+    return items[0]?.vendorName || "Selected Vendor";
+  }, [vendorFilter, items]);
+
   const createOrder = useMutation(api.productOrders.mutations.createProductOrder);
   const updatePaymentStatus = useMutation(api.productOrders.mutations.updatePaymentStatus);
   const currentUser = useQuery(api.users.queries.getCurrentUser);
@@ -193,7 +209,10 @@ export default function CheckoutPage() {
   const taxRate = taxRateData ?? 0;
   const taxRatePercent = (taxRate * 100).toFixed(2).replace(/\.?0+$/, ''); // e.g., "6.25" or "7"
 
-  const subtotal = getSubtotal();
+  // Calculate subtotal from filtered items (not full cart)
+  const subtotal = useMemo(() => {
+    return items.reduce((total, item) => total + item.productPrice * item.quantity, 0);
+  }, [items]);
 
   // Dynamic shipping rate lookup based on state
   const shippingStateCode = state.trim().toUpperCase();
@@ -322,6 +341,132 @@ export default function CheckoutPage() {
     );
   }
 
+  // Block multi-vendor checkout - currently only single-vendor checkout is supported
+  // Skip this check if we're already filtering by vendor query param
+  const vendorGroups = getItemsByVendor();
+  const vendorCount = getVendorCount();
+
+  if (vendorCount > 1 && !vendorFilter) {
+    return (
+      <>
+        <PublicHeader />
+        <MarketplaceSubNav />
+        <div className="min-h-screen bg-background">
+          <div className="container mx-auto px-4 py-8 max-w-4xl">
+            {/* Back Link */}
+            <Link
+              href="/user/cart"
+              className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground mb-6"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              Back to Cart
+            </Link>
+
+            {/* Multi-vendor Warning */}
+            <div className="bg-card rounded-2xl shadow-lg p-8 border border-border">
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle className="w-8 h-8 text-amber-600 dark:text-amber-400" />
+                </div>
+                <h1 className="text-2xl font-bold text-foreground mb-2">
+                  Multiple Vendors in Cart
+                </h1>
+                <p className="text-muted-foreground max-w-md mx-auto">
+                  Your cart contains items from {vendorCount} different vendors.
+                  Please checkout one vendor at a time to ensure proper order processing and delivery.
+                </p>
+              </div>
+
+              {/* Vendor Groups */}
+              <div className="space-y-6">
+                <h2 className="text-lg font-semibold text-foreground border-b border-border pb-2">
+                  Choose a vendor to checkout:
+                </h2>
+
+                {vendorGroups.map((group) => (
+                  <div
+                    key={group.vendorId}
+                    className="border border-border rounded-xl p-4 hover:border-primary/50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Store className="w-5 h-5 text-primary" />
+                          <h3 className="font-semibold text-foreground">{group.vendorName}</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-3">
+                          {group.itemCount} item{group.itemCount !== 1 ? 's' : ''} ·
+                          Subtotal: ${(group.subtotal / 100).toFixed(2)}
+                        </p>
+
+                        {/* Item Preview */}
+                        <div className="flex flex-wrap gap-2">
+                          {group.items.slice(0, 3).map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-2 bg-muted/50 rounded-lg px-2 py-1">
+                              {item.productImage ? (
+                                <Image
+                                  src={item.productImage}
+                                  alt={item.productName}
+                                  width={24}
+                                  height={24}
+                                  className="rounded object-cover"
+                                />
+                              ) : (
+                                <Package className="w-4 h-4 text-muted-foreground" />
+                              )}
+                              <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                {item.productName}
+                              </span>
+                            </div>
+                          ))}
+                          {group.items.length > 3 && (
+                            <span className="text-xs text-muted-foreground px-2 py-1">
+                              +{group.items.length - 3} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <Link
+                        href={`/marketplace/checkout?vendor=${group.vendorId}`}
+                        className="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary/90 transition-colors whitespace-nowrap flex items-center gap-2"
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        Checkout
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Alternative Actions */}
+              <div className="mt-8 pt-6 border-t border-border">
+                <p className="text-sm text-muted-foreground text-center mb-4">
+                  Or manage your cart to checkout all items together:
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                  <Link
+                    href="/user/cart"
+                    className="px-6 py-2 border border-input rounded-lg text-foreground hover:bg-muted transition-colors text-center"
+                  >
+                    Edit Cart
+                  </Link>
+                  <Link
+                    href="/marketplace"
+                    className="px-6 py-2 border border-input rounded-lg text-foreground hover:bg-muted transition-colors text-center"
+                  >
+                    Continue Shopping
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <PublicFooter />
+      </>
+    );
+  }
+
   const handleContinueToPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -384,8 +529,7 @@ export default function CheckoutPage() {
       setOrderId(result.orderId);
       setOrderNumber(result.orderNumber);
 
-      // Get vendor info for the first item (for now, single-vendor checkout)
-      // TODO: Support multi-vendor checkout
+      // Get vendor info - single-vendor checkout only (multi-vendor blocked earlier in component)
       const firstVendorId = items[0]?.vendorId;
       let vendorInfo = null;
 
@@ -543,7 +687,31 @@ export default function CheckoutPage() {
 
         {/* Main Content */}
         <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <h1 className="text-3xl font-bold text-foreground mb-8">Checkout</h1>
+          <h1 className="text-3xl font-bold text-foreground mb-4">Checkout</h1>
+
+          {/* Vendor Filter Notice */}
+          {vendorFilter && filteredVendorName && (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 mb-6 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <Store className="w-5 h-5 text-primary" />
+                <div>
+                  <p className="font-medium text-foreground">
+                    Checking out items from {filteredVendorName}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {items.length} item{items.length !== 1 ? 's' : ''} ·
+                    Other items remain in your cart
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/marketplace/checkout"
+                className="text-sm text-primary hover:underline whitespace-nowrap"
+              >
+                View all vendors
+              </Link>
+            </div>
+          )}
 
           {/* Step Indicator */}
           <div className="flex items-center gap-4 mb-8">

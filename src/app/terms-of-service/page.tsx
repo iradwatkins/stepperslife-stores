@@ -10,7 +10,7 @@ export default function TermsOfServicePage() {
       <div className="min-h-screen bg-muted py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-4xl mx-auto bg-card rounded-lg shadow-sm p-8 md:p-12">
           <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-2">Terms of Service</h1>
-          <p className="text-muted-foreground mb-8">Last updated: December 29, 2025</p>
+          <p className="text-muted-foreground mb-8">Last updated: January 11, 2026</p>
 
           <div className="prose prose-gray dark:prose-invert max-w-none space-y-8">
             {/* Agreement */}
@@ -259,7 +259,7 @@ export default function TermsOfServicePage() {
 
               <h3 className="text-xl font-medium text-foreground mb-3 mt-4">13.2 Governing Law</h3>
               <p className="text-muted-foreground leading-relaxed">
-                These Terms shall be governed by the laws of the State of [Your State], United States,
+                These Terms shall be governed by the laws of the State of Illinois, United States,
                 without regard to its conflict of law provisions.
               </p>
             </section>
