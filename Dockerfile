@@ -15,9 +15,14 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Set environment variables for build
-ARG NEXT_PUBLIC_CONVEX_URL
-ENV NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL
+# Set environment variables for build (public values, safe to hardcode)
+ENV NEXT_PUBLIC_CONVEX_URL=https://convex.toolboxhosting.com
+ENV NEXT_PUBLIC_APP_URL=https://stepperslife.com
+ENV NEXT_PUBLIC_APP_DOMAIN=stepperslife.com
+ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_51SDlY3CGiBTX8gGTC0qqcpjpSSpFRZOnwVdOFwTP5utqRbPVRw4ZMc4jyA11RfKBL4odvp0wOXw2QVFqwGHplNEl006S7oTQdD
+ENV NEXT_PUBLIC_PAYPAL_CLIENT_ID=AWcmEjsKDeNUzvVQJyvc3lq5n4NXsh7-sHPgGT4ZiPFo8X6csYZcElZg2wsu_xsZE22DUoXOtF3MolVK
+ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=G-4BWD73WR13
+ENV NEXT_PUBLIC_ENABLE_SEATING_CHARTS=true
 
 # Build the application
 RUN npm run build
