@@ -136,6 +136,21 @@ export const rateLimiters = {
 
   // Strict endpoints: 10 requests per minute
   strict: { windowMs: 60 * 1000, maxRequests: 10 },
+
+  // Payment endpoints: 20 requests per minute (prevent abuse)
+  payment: { windowMs: 60 * 1000, maxRequests: 20 },
+
+  // Payment creation: 10 requests per minute (very strict for creating payments)
+  paymentCreate: { windowMs: 60 * 1000, maxRequests: 10 },
+
+  // Webhook endpoints: 200 requests per minute (high for Stripe/PayPal callbacks)
+  webhook: { windowMs: 60 * 1000, maxRequests: 200 },
+
+  // Order creation: 15 orders per minute per user
+  orderCreate: { windowMs: 60 * 1000, maxRequests: 15 },
+
+  // Vendor operations: 30 requests per minute
+  vendor: { windowMs: 60 * 1000, maxRequests: 30 },
 };
 
 /**

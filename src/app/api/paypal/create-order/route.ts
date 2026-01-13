@@ -1,6 +1,15 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
+import {
+  createApiContext,
+  applyRateLimit,
+  checkCircuitBreaker,
+  recordCircuitResult,
+  createSuccessResponse,
+  extractPaymentContext,
+} from "@/lib/api-middleware";
+import { circuitBreakers } from "@/lib/circuit-breaker";
 
 const PAYPAL_CLIENT_ID = process.env.PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -16,6 +25,14 @@ const PAYPAL_TIMEOUT_MS = 30000;
 
 // Max retry attempts
 const MAX_RETRIES = 3;
+
+// Middleware options for this route
+const middlewareOptions = {
+  service: "PayPal",
+  operation: "Create Order",
+  rateLimit: "paymentCreate" as const,
+  circuitBreaker: "paypal" as const,
+};
 
 // Lazy-initialize Convex client to avoid build-time errors
 let _convex: ConvexHttpClient | null = null;
@@ -128,15 +145,34 @@ async function getPayPalAccessToken(): Promise<string> {
  * - 100% goes to SteppersLife platform
  */
 export async function POST(request: NextRequest) {
+  // Initialize API context with logging and correlation ID
+  const context = await createApiContext(request, middlewareOptions);
+
   try {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, middlewareOptions, context);
+    if (rateLimitResponse) {
+      return rateLimitResponse as NextResponse;
+    }
+
+    // Check circuit breaker
+    const circuitResponse = checkCircuitBreaker(middlewareOptions, context);
+    if (circuitResponse) {
+      return circuitResponse as NextResponse;
+    }
+
     if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+      context.logger.error("PayPal not configured - missing credentials");
       return NextResponse.json(
-        { error: "PayPal is not configured" },
+        { error: "PayPal is not configured", correlationId: context.correlationId },
         { status: 500 }
       );
     }
 
     const body = await request.json();
+
+    // Log payment context
+    context.logger.info("Creating PayPal order", extractPaymentContext(body));
     const {
       amount, // Total amount in cents
       platformFee = 0, // Platform fee in cents (for split payments)
@@ -255,13 +291,16 @@ export async function POST(request: NextRequest) {
 
     if (!orderResponse.ok) {
       const errorData = await orderResponse.json();
-      console.error("[PayPal] Create order failed:", errorData);
+      // Record circuit breaker failure for API errors
+      recordCircuitResult(middlewareOptions, false, new Error("PayPal API error"));
+      context.logger.error("PayPal create order failed", new Error(JSON.stringify(errorData)));
       return NextResponse.json(
         {
           success: false,
           error: "Failed to create PayPal order",
           details: errorData,
-          code: "PAYPAL_ORDER_CREATION_FAILED"
+          code: "PAYPAL_ORDER_CREATION_FAILED",
+          correlationId: context.correlationId,
         },
         { status: 500 }
       );
@@ -269,33 +308,48 @@ export async function POST(request: NextRequest) {
 
     const orderData = await orderResponse.json();
 
+    // Record circuit breaker success
+    recordCircuitResult(middlewareOptions, true);
+
+    context.logger.info("PayPal order created successfully", {
+      paypalOrderId: orderData.id,
+      status: orderData.status,
+    });
+
     return NextResponse.json({
       success: true,
       orderId: orderData.id,
       status: orderData.status,
+      correlationId: context.correlationId,
     });
   } catch (error: any) {
-    console.error("[PayPal] Create order error:", error.message);
+    // Record circuit breaker failure
+    recordCircuitResult(middlewareOptions, false, error);
 
-    // Generate unique request ID for debugging
-    const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    context.logger.error("PayPal create order failed", error);
 
     // Determine error type and message
     let errorCode = "INTERNAL_ERROR";
     let errorMessage = "Failed to create PayPal order";
+    let status = 500;
 
-    if (error.message?.includes("credentials")) {
+    if (error.code === "CIRCUIT_OPEN") {
+      errorCode = "CIRCUIT_OPEN";
+      errorMessage = "PayPal service temporarily unavailable. Please try again in 30 seconds.";
+      status = 503;
+    } else if (error.message?.includes("credentials")) {
       errorCode = "PAYPAL_NOT_CONFIGURED";
       errorMessage = "PayPal payment is temporarily unavailable";
     } else if (error.message?.includes("timeout")) {
       errorCode = "PAYPAL_TIMEOUT";
       errorMessage = "PayPal service timed out. Please try again.";
+      status = 503;
     } else if (error.message?.includes("access token")) {
       errorCode = "PAYPAL_AUTH_FAILED";
       errorMessage = "Unable to authenticate with PayPal";
     }
 
-    // In development or if debug flag is set, include more details
+    // In development, include more details
     const isDev = process.env.NODE_ENV === "development";
     const debugInfo = isDev ? {
       message: error.message,
@@ -308,13 +362,11 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         error: errorMessage,
-        details: {
-          code: errorCode,
-          requestId,
-          ...(debugInfo && { debug: debugInfo }),
-        }
+        code: errorCode,
+        correlationId: context.correlationId,
+        ...(debugInfo && { debug: debugInfo }),
       },
-      { status: 500 }
+      { status }
     );
   }
 }

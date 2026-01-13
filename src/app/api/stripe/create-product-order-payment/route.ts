@@ -1,6 +1,17 @@
 import { type NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import crypto from "crypto";
+import {
+  createApiContext,
+  applyRateLimit,
+  checkCircuitBreaker,
+  recordCircuitResult,
+  createSuccessResponse,
+  createErrorResponse,
+  extractPaymentContext,
+  type ApiContext,
+} from "@/lib/api-middleware";
+import { circuitBreakers, withCircuitBreaker } from "@/lib/circuit-breaker";
 
 // Generate idempotency key to prevent duplicate payments
 function generateIdempotencyKey(orderId: string, amount: number): string {
@@ -22,6 +33,14 @@ const stripe = STRIPE_SECRET_KEY
     })
   : null;
 
+// Middleware options for this route
+const middlewareOptions = {
+  service: "Stripe",
+  operation: "Create Product Order Payment",
+  rateLimit: "paymentCreate" as const,
+  circuitBreaker: "stripe" as const,
+};
+
 /**
  * Create a Payment Intent for Product Orders with Split Payment
  * POST /api/stripe/create-product-order-payment
@@ -34,9 +53,24 @@ const stripe = STRIPE_SECRET_KEY
  * Payment methods: Card + Cash App Pay (via Stripe)
  */
 export async function POST(request: NextRequest) {
+  // Initialize API context with logging and correlation ID
+  const context = await createApiContext(request, middlewareOptions);
+
   try {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, middlewareOptions, context);
+    if (rateLimitResponse) {
+      return rateLimitResponse as NextResponse;
+    }
+
+    // Check circuit breaker
+    const circuitResponse = checkCircuitBreaker(middlewareOptions, context);
+    if (circuitResponse) {
+      return circuitResponse as NextResponse;
+    }
+
     if (!stripe) {
-      console.error("[Stripe Product Order] Stripe not initialized - missing STRIPE_SECRET_KEY");
+      context.logger.error("Stripe not initialized - missing STRIPE_SECRET_KEY");
       return NextResponse.json(
         { error: "Payment system is not configured. Please contact support." },
         { status: 500 }
@@ -44,6 +78,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
+
+    // Log payment context
+    context.logger.info("Creating product order payment", extractPaymentContext(body));
     const {
       amount, // Total amount in cents
       currency = "usd",
@@ -135,55 +172,96 @@ export async function POST(request: NextRequest) {
     // If no real Stripe account, platform receives full amount
     // Vendor will be paid out manually via vendorPayouts
 
-    // Create Payment Intent
-    const paymentIntent = await stripe.paymentIntents.create(
-      paymentIntentOptions,
-      {
-        idempotencyKey: idempotencyKey,
-      }
+    // Create Payment Intent with circuit breaker protection
+    const paymentIntent = await withCircuitBreaker(
+      circuitBreakers.stripe,
+      () => stripe.paymentIntents.create(
+        paymentIntentOptions,
+        {
+          idempotencyKey: idempotencyKey,
+        }
+      )
     );
 
-    return NextResponse.json({
+    // Record successful circuit breaker call
+    recordCircuitResult(middlewareOptions, true);
+
+    context.logger.info("Payment intent created successfully", {
+      paymentIntentId: paymentIntent.id,
+      splitPayment: isRealStripeAccount,
+      applicationFeeAmount: isRealStripeAccount ? applicationFeeAmount : 0,
+    });
+
+    return createSuccessResponse({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       chargeType: "PRODUCT_ORDER",
       splitPayment: isRealStripeAccount,
       applicationFeeAmount: isRealStripeAccount ? applicationFeeAmount : 0,
       vendorReceives: isRealStripeAccount ? amount - applicationFeeAmount : 0,
-    });
+      correlationId: context.correlationId,
+    }, context);
   } catch (error: any) {
-    console.error("[Stripe Product Order] Creation error:", {
-      message: error.message,
+    // Record circuit breaker failure for connection/API errors
+    recordCircuitResult(middlewareOptions, false, error);
+
+    context.logger.error("Payment intent creation failed", error, {
       type: error.type,
       code: error.code,
       statusCode: error.statusCode,
-      raw: error.raw?.message,
     });
+
+    // Handle circuit breaker open error
+    if (error.code === "CIRCUIT_OPEN") {
+      return NextResponse.json(
+        {
+          error: "Payment service temporarily unavailable. Please try again in 30 seconds.",
+          code: "CIRCUIT_OPEN",
+          retryAfter: error.retryAfter,
+          correlationId: context.correlationId,
+        },
+        { status: 503 }
+      );
+    }
 
     // Handle specific Stripe errors
     if (error.type === "StripeInvalidRequestError") {
       if (error.message?.includes("destination")) {
         return NextResponse.json(
-          { error: "Vendor payment account is not properly configured. Please contact support." },
+          {
+            error: "Vendor payment account is not properly configured. Please contact support.",
+            correlationId: context.correlationId,
+          },
           { status: 400 }
         );
       }
-      // Return the actual Stripe error for debugging
       return NextResponse.json(
-        { error: `Stripe error: ${error.message}`, code: error.code },
+        {
+          error: `Stripe error: ${error.message}`,
+          code: error.code,
+          correlationId: context.correlationId,
+        },
         { status: 400 }
       );
     }
 
     if (error.type === "StripeConnectionError" || error.type === "StripeAPIError") {
       return NextResponse.json(
-        { error: `Stripe connection issue: ${error.message}`, type: error.type },
+        {
+          error: "Payment service connection issue. Please try again.",
+          type: error.type,
+          correlationId: context.correlationId,
+        },
         { status: 503 }
       );
     }
 
     return NextResponse.json(
-      { error: error.message || "Failed to create payment intent", type: error.type },
+      {
+        error: error.message || "Failed to create payment intent",
+        type: error.type,
+        correlationId: context.correlationId,
+      },
       { status: 500 }
     );
   }

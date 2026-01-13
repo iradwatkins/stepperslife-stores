@@ -4,6 +4,15 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import crypto from "crypto";
 import { verifyAuth } from "@/lib/auth/api-auth";
+import {
+  createApiContext,
+  applyRateLimit,
+  checkCircuitBreaker,
+  recordCircuitResult,
+  createSuccessResponse,
+  extractPaymentContext,
+} from "@/lib/api-middleware";
+import { circuitBreakers, withCircuitBreaker } from "@/lib/circuit-breaker";
 
 // Generate idempotency key to prevent duplicate payments
 function generateIdempotencyKey(orderId: string, amount: number): string {
@@ -33,6 +42,14 @@ const stripe = STRIPE_SECRET_KEY
 // Initialize Convex client
 const convex = new ConvexHttpClient(CONVEX_URL);
 
+// Middleware options for this route
+const middlewareOptions = {
+  service: "Stripe",
+  operation: "Create Payment Intent",
+  rateLimit: "paymentCreate" as const,
+  circuitBreaker: "stripe" as const,
+};
+
 /**
  * Create a Payment Intent with Stripe Connect split payments
  * POST /api/stripe/create-payment-intent
@@ -44,24 +61,47 @@ const convex = new ConvexHttpClient(CONVEX_URL);
  * The charge pattern is determined by the useDirectCharge parameter.
  */
 export async function POST(request: NextRequest) {
+  // Initialize API context with logging and correlation ID
+  const context = await createApiContext(request, middlewareOptions);
+
   try {
+    // Apply rate limiting
+    const rateLimitResponse = applyRateLimit(request, middlewareOptions, context);
+    if (rateLimitResponse) {
+      return rateLimitResponse as NextResponse;
+    }
+
+    // Check circuit breaker
+    const circuitResponse = checkCircuitBreaker(middlewareOptions, context);
+    if (circuitResponse) {
+      return circuitResponse as NextResponse;
+    }
+
     // Verify user is authenticated
     const auth = await verifyAuth(request);
     if (!auth.authenticated || !auth.user) {
+      context.logger.warn("Unauthenticated payment attempt");
       return NextResponse.json(
-        { error: "Authentication required to create payment" },
+        { error: "Authentication required to create payment", correlationId: context.correlationId },
         { status: 401 }
       );
     }
 
     if (!stripe) {
+      context.logger.error("Stripe not initialized - missing STRIPE_SECRET_KEY");
       return NextResponse.json(
-        { error: "Stripe is not configured. Please contact support." },
+        { error: "Stripe is not configured. Please contact support.", correlationId: context.correlationId },
         { status: 500 }
       );
     }
 
     const body = await request.json();
+
+    // Log payment context
+    context.logger.info("Creating payment intent", {
+      ...extractPaymentContext(body),
+      userId: auth.user.userId,
+    });
     const {
       eventId, // Event ID to fetch payment config
       amount, // Total amount in cents
@@ -229,15 +269,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Record circuit breaker success
+    recordCircuitResult(middlewareOptions, true);
+
+    context.logger.info("Payment intent created successfully", {
+      paymentIntentId: paymentIntent.id,
+      chargePattern: useDirectCharge ? "DIRECT" : "DESTINATION",
+    });
+
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
       paymentIntentId: paymentIntent.id,
       chargePattern: useDirectCharge ? "DIRECT" : "DESTINATION",
+      correlationId: context.correlationId,
     });
   } catch (error: any) {
-    console.error("[Stripe Payment Intent] Creation error:", error);
+    // Record circuit breaker failure
+    recordCircuitResult(middlewareOptions, false, error);
+
+    context.logger.error("Payment intent creation failed", error, {
+      type: error.type,
+      code: error.code,
+    });
+
+    // Handle circuit breaker open
+    if (error.code === "CIRCUIT_OPEN") {
+      return NextResponse.json(
+        {
+          error: "Payment service temporarily unavailable. Please try again in 30 seconds.",
+          code: "CIRCUIT_OPEN",
+          retryAfter: error.retryAfter,
+          correlationId: context.correlationId,
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
-      { error: error.message || "Failed to create payment intent" },
+      {
+        error: error.message || "Failed to create payment intent",
+        correlationId: context.correlationId,
+      },
       { status: 500 }
     );
   }
