@@ -89,6 +89,61 @@ export const paypalCreditPurchaseSchema = z.object({
 export type PayPalCreditPurchaseRequest = z.infer<typeof paypalCreditPurchaseSchema>;
 
 /**
+ * Stripe Create Payment Intent Request Schema
+ */
+export const stripeCreatePaymentIntentSchema = z.object({
+  amount: z
+    .number()
+    .int('Amount must be an integer (cents)')
+    .min(LIMITS.MIN_PAYMENT_AMOUNT_CENTS, `Amount must be at least ${LIMITS.MIN_PAYMENT_AMOUNT_CENTS} cents ($0.50)`)
+    .max(LIMITS.MAX_PAYMENT_AMOUNT_CENTS, `Amount cannot exceed ${LIMITS.MAX_PAYMENT_AMOUNT_CENTS} cents ($100,000)`),
+  currency: z
+    .string()
+    .toLowerCase()
+    .refine((val) => val === 'usd', 'Only USD currency is supported')
+    .default('usd')
+    .optional(),
+  eventId: z.string().optional(),
+  connectedAccountId: z.string().optional(),
+  platformFee: z.number().int().min(0).optional(),
+  orderId: z.string().optional(),
+  orderNumber: z.string().optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+  useDirectCharge: z.boolean().default(false).optional(),
+});
+
+export type StripeCreatePaymentIntentRequest = z.infer<typeof stripeCreatePaymentIntentSchema>;
+
+/**
+ * Stripe Product Order Payment Schema
+ */
+export const stripeProductOrderPaymentSchema = z.object({
+  amount: z
+    .number()
+    .int('Amount must be an integer (cents)')
+    .min(LIMITS.MIN_PAYMENT_AMOUNT_CENTS, `Amount must be at least ${LIMITS.MIN_PAYMENT_AMOUNT_CENTS} cents ($0.50)`)
+    .max(LIMITS.MAX_PAYMENT_AMOUNT_CENTS, `Amount cannot exceed ${LIMITS.MAX_PAYMENT_AMOUNT_CENTS} cents ($100,000)`),
+  currency: z
+    .string()
+    .toLowerCase()
+    .refine((val) => val === 'usd', 'Only USD currency is supported')
+    .default('usd')
+    .optional(),
+  orderId: z.string().optional(),
+  orderNumber: z.string().optional(),
+  vendorId: z.string().min(1, 'Vendor ID is required'),
+  vendorName: z.string().optional(),
+  vendorStripeAccountId: z.string().optional(),
+  commissionPercent: z.number().min(0).max(100).default(15).optional(),
+  customerName: z.string().optional(),
+  customerEmail: z.string().email().optional(),
+  items: z.array(z.record(z.string(), z.unknown())).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+});
+
+export type StripeProductOrderPaymentRequest = z.infer<typeof stripeProductOrderPaymentSchema>;
+
+/**
  * Generic Webhook Event Schema
  */
 export const webhookEventSchema = z.object({

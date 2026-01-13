@@ -12,6 +12,11 @@ import {
   type ApiContext,
 } from "@/lib/api-middleware";
 import { circuitBreakers, withCircuitBreaker } from "@/lib/circuit-breaker";
+import {
+  stripeProductOrderPaymentSchema,
+  validateRequest,
+  formatValidationError,
+} from "@/lib/validations/payment";
 
 // Generate idempotency key to prevent duplicate payments
 function generateIdempotencyKey(orderId: string, amount: number): string {
@@ -79,45 +84,34 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
-    // Log payment context
-    context.logger.info("Creating product order payment", extractPaymentContext(body));
+    // Validate request body with Zod schema
+    const validation = validateRequest(stripeProductOrderPaymentSchema, body);
+    if (!validation.success) {
+      const errorMessage = formatValidationError(validation.error);
+      context.logger.warn("Payment validation failed", { error: errorMessage });
+      return NextResponse.json(
+        { error: errorMessage, correlationId: context.correlationId },
+        { status: 400 }
+      );
+    }
+
     const {
-      amount, // Total amount in cents
+      amount,
       currency = "usd",
-      orderId, // Convex order ID (optional - can be created after payment)
-      orderNumber, // Human-readable order number (optional)
-      vendorId, // Vendor Convex ID
+      orderId,
+      orderNumber,
+      vendorId,
       vendorName,
-      vendorStripeAccountId, // Vendor's Stripe Connect account ID
-      commissionPercent, // Platform commission percentage (e.g., 15)
+      vendorStripeAccountId,
+      commissionPercent = 15,
       customerName,
       customerEmail,
-      items, // Array of order items for metadata
+      items,
       metadata = {},
-    } = body;
+    } = validation.data;
 
-    // Validation
-    if (!amount || amount < 50) {
-      return NextResponse.json(
-        { error: "Amount is required and must be at least $0.50 (50 cents)" },
-        { status: 400 }
-      );
-    }
-
-    // Validate currency - only USD is supported
-    if (currency && currency.toLowerCase() !== "usd") {
-      return NextResponse.json(
-        { error: "Only USD currency is supported" },
-        { status: 400 }
-      );
-    }
-
-    if (!vendorId) {
-      return NextResponse.json(
-        { error: "Vendor ID is required" },
-        { status: 400 }
-      );
-    }
+    // Log payment context
+    context.logger.info("Creating product order payment", extractPaymentContext(body));
 
     // Calculate application fee (platform commission)
     // Commission is calculated on subtotal (before tax/shipping)

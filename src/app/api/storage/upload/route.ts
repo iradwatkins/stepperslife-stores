@@ -9,6 +9,26 @@ import { NextRequest, NextResponse } from "next/server";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL || "https://convex.toolboxhosting.com";
 
+// Allowed origins for CORS - restrict to SteppersLife domains only
+const ALLOWED_ORIGINS = [
+  "https://stepperslife.com",
+  "https://www.stepperslife.com",
+  "https://stores.stepperslife.com",
+  "https://events.stepperslife.com",
+  "https://restaurants.stepperslife.com",
+  "http://localhost:3017",
+  "http://localhost:3001",
+];
+
+function getCorsOrigin(request: NextRequest): string {
+  const origin = request.headers.get("origin");
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    return origin;
+  }
+  // Return first allowed origin as default (blocks unauthorized origins)
+  return ALLOWED_ORIGINS[0];
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Get the token from query params
@@ -57,13 +77,15 @@ export async function POST(request: NextRequest) {
 }
 
 // Handle OPTIONS for CORS preflight
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
+  const corsOrigin = getCorsOrigin(request);
   return new NextResponse(null, {
     status: 204,
     headers: {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": corsOrigin,
       "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Credentials": "true",
     },
   });
 }

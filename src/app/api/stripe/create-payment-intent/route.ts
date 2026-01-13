@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import crypto from "crypto";
 import { verifyAuth } from "@/lib/auth/api-auth";
 import {
@@ -13,6 +14,11 @@ import {
   extractPaymentContext,
 } from "@/lib/api-middleware";
 import { circuitBreakers, withCircuitBreaker } from "@/lib/circuit-breaker";
+import {
+  stripeCreatePaymentIntentSchema,
+  validateRequest,
+  formatValidationError,
+} from "@/lib/validations/payment";
 
 // Generate idempotency key to prevent duplicate payments
 function generateIdempotencyKey(orderId: string, amount: number): string {
@@ -97,37 +103,34 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
 
+    // Validate request body with Zod schema
+    const validation = validateRequest(stripeCreatePaymentIntentSchema, body);
+    if (!validation.success) {
+      const errorMessage = formatValidationError(validation.error);
+      context.logger.warn("Payment validation failed", { error: errorMessage });
+      return NextResponse.json(
+        { error: errorMessage, correlationId: context.correlationId },
+        { status: 400 }
+      );
+    }
+
     // Log payment context
     context.logger.info("Creating payment intent", {
       ...extractPaymentContext(body),
       userId: auth.user.userId,
     });
+
     const {
       eventId, // Event ID to fetch payment config
       amount, // Total amount in cents
       currency = "usd",
       connectedAccountId, // Optional: can override from payment config
-      platformFee, // Platform fee in cents
+      platformFee = 0, // Platform fee in cents (default 0)
       orderId,
       orderNumber,
       metadata = {},
       useDirectCharge = false, // Default to DESTINATION CHARGE for platform control
-    } = body;
-
-    if (!amount || typeof amount !== "number" || amount <= 0) {
-      return NextResponse.json(
-        { error: "Valid positive amount is required" },
-        { status: 400 }
-      );
-    }
-
-    // Validate currency - only USD is supported
-    if (currency && currency.toLowerCase() !== "usd") {
-      return NextResponse.json(
-        { error: "Only USD currency is supported" },
-        { status: 400 }
-      );
-    }
+    } = validation.data;
 
     // Determine which connected account to use
     let stripeAccountId = connectedAccountId;
@@ -138,7 +141,7 @@ export async function POST(request: NextRequest) {
     if (eventId && !connectedAccountId) {
       try {
         const paymentConfig = await convex.query(api.paymentConfig.queries.getEventPaymentConfig, {
-          eventId,
+          eventId: eventId as Id<"events">,
         });
 
         if (!paymentConfig?.stripeConnectAccountId) {
@@ -158,7 +161,7 @@ export async function POST(request: NextRequest) {
         stripeAccountId = paymentConfig.stripeConnectAccountId;
 
         // Get organizer ID for debt settlement
-        const event = await convex.query(api.events.queries.getEventById, { eventId });
+        const event = await convex.query(api.events.queries.getEventById, { eventId: eventId as Id<"events"> });
         organizerId = event?.organizerId;
 
         // Check organizer's platform debt and calculate settlement
